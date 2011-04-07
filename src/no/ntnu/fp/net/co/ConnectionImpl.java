@@ -30,7 +30,7 @@ import no.ntnu.fp.net.cl.KtnDatagram.Flag;
  * of the functionality, leaving message passing and error handling to this
  * implementation.
  * 
- * @author Sebj�rn Birkeland and Stein Jakob Nordb�
+ * @author Sebj�rn Birkeland and Stein Jakob Nordb�
  * @see no.ntnu.fp.net.co.Connection
  * @see no.ntnu.fp.net.cl.ClSocket
  */
@@ -46,7 +46,8 @@ public class ConnectionImpl extends AbstractConnection {
      *            - the local port to associate with this connection
      */
     public ConnectionImpl(int myPort) {
-        throw new NotImplementedException();
+    	super();
+    	this.myPort = 5000;
     }
 
     private String getIPv4Address() {
@@ -57,6 +58,30 @@ public class ConnectionImpl extends AbstractConnection {
             return "127.0.0.1";
         }
     }
+    
+    
+    public KtnDatagram sendUntilResponse(KtnDatagram packet) throws IOException {
+    	KtnDatagram datagram = null;
+    	int attempts = 0;
+    	while(!isValid(datagram)) {
+    	
+    		attempts+=1;
+    		if(attempts>10) {
+        		throw new IOException("Kunne ikke sende pakken, har prøvd "+ attempts + "ganger");
+    		}
+    		
+    		try {
+    			simplySendPacket(packet);
+    			datagram = receiveAck();
+    		}
+    		catch(Exception e) {
+    			System.out.println("error");
+    			continue;
+    		}
+		}
+    	return datagram;
+    }
+    
 
     /**
      * Establish a connection to a remote location.
@@ -73,7 +98,19 @@ public class ConnectionImpl extends AbstractConnection {
      */
     public void connect(InetAddress remoteAddress, int remotePort) throws IOException,
             SocketTimeoutException {
-        throw new NotImplementedException();
+
+    	if(state != State.CLOSED){
+    		throw new ConnectException("Socket not closed");
+    	}
+    	
+    	this.remotePort = remotePort;
+    	this.remoteAddress = "localhost";
+    	
+    	state = State.SYN_SENT;
+    	KtnDatagram datagram = sendUntilResponse(constructInternalPacket(Flag.SYN));
+    	lastValidPacketReceived = datagram;
+    	sendAck(datagram, false);
+    	state = State.ESTABLISHED;
     }
 
     /**
@@ -83,7 +120,33 @@ public class ConnectionImpl extends AbstractConnection {
      * @see Connection#accept()
      */
     public Connection accept() throws IOException, SocketTimeoutException {
-        throw new NotImplementedException();
+    	
+    	if(state != State.CLOSED && state != State.LISTEN) {
+    		throw new ConnectException("Socket not closed");
+    	}
+    
+    	state = State.LISTEN;
+    	
+    	KtnDatagram datagramReceived = null;
+    	
+    	while(!isValid(datagramReceived)) {
+    		datagramReceived = receivePacket(true);
+    	}
+    	
+    	ConnectionImpl connection = new ConnectionImpl(5000);
+    	
+    	//Oppretter ny connection mot klient
+    	lastValidPacketReceived = datagramReceived;
+    	state = State.SYN_RCVD;
+    	System.out.println("Opprettet ny socket, port. " + datagramReceived.getSrc_port());
+    	sendAck(datagramReceived, true);
+    	if(!isValid(receiveAck())) {
+    		state = State.CLOSED;
+    		throw new IOException("Feil ved oppkobling");
+    	}
+    	state = State.ESTABLISHED;    	
+    	return connection;
+    	
     }
 
     /**
@@ -132,6 +195,46 @@ public class ConnectionImpl extends AbstractConnection {
      * @return true if packet is free of errors, false otherwise.
      */
     protected boolean isValid(KtnDatagram packet) {
-        throw new NotImplementedException();
+    	if (packet != null && packet.calculateChecksum() == packet.getChecksum() && isStateValid(packet)) {
+    		return true;
+    	}
+    	return false;
+    }
+    
+    private boolean isStateValid(KtnDatagram packet) {
+    	//er det en ack pakke sjekkes det at pakken acker forrige pakke sent, ellers er det uansett false
+    	if ((packet.getFlag() == Flag.ACK || packet.getFlag() == Flag.SYN_ACK) && packet.getAck() != lastDataPacketSent.getSeq_nr()) {
+    		return false;
+    	}
+    	// Hvis det er en fin pakke så må data være null
+    	if (packet.getFlag() == Flag.FIN && packet.getPayload() != null) {
+    		return false; //hadde fikset problemet med at fin dukker opp i datapakker av og til hvis abstractconnection hadde kallt isValid som i dokumentasjonen
+    	}
+    	// Hvis state er SYN_SENT, betyr det at pakken bør være SYN_ACK og at den er fra riktig host
+    	if (state == State.SYN_SENT) {
+    		remotePort = packet.getSrc_port(); //verdien blir uansett satt riktig neste gang connect kjøres selv om pakken ikke var synack, sjekker acknr
+    		return (packet.getFlag() == Flag.SYN_ACK && remoteAddress.equals(packet.getSrc_addr()));
+    	}
+    	else if (state == State.LISTEN) {
+    		return (packet.getFlag() == Flag.SYN);
+    	}
+    	//alle andre pakker skal port og source være stilt inn for programmet så her sjekker den etter feil
+    	else if (packet.getSrc_addr() != remoteAddress && packet.getSrc_port() != remotePort) {
+    		return false;
+    	}
+    	//dette må være ack
+    	else if (state == State.SYN_RCVD) {
+    		return (packet.getFlag() == Flag.ACK);
+    	}
+    	//ønsker her ack tilbake eller fin
+    	else if (state == State.FIN_WAIT_1 || state == State.FIN_WAIT_2) {
+    		return (packet.getFlag() == Flag.FIN || packet.getFlag() == Flag.ACK);
+    	}
+    	//dette må være fin-pakke
+    	else if (state == State.CLOSE_WAIT) {
+    		return (packet.getFlag() == Flag.FIN);
+    	}
+    	return true;
+    	//sjekker til sammen etter null-pakker, checksum, remoteaddress, remoteport, seqno, 
     }
 }
