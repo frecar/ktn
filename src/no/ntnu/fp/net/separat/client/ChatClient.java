@@ -96,7 +96,6 @@ public class ChatClient {
         } catch (IOException e) {
             e.printStackTrace();
         }
-
     }
 
     private void recieve(String message) {
@@ -138,7 +137,6 @@ public class ChatClient {
             // TODO Auto-generated catch block
             e.printStackTrace();
         }
-
     }
 
     public static void main(String[] args) {
